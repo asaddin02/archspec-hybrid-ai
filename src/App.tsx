@@ -56,7 +56,7 @@ const MODE_OPTIONS: { key: HybridModeKey; title: string; subtitle: string }[] = 
   {
     key: 'PREFER_IN_CLOUD',
     title: 'Prefer In-Cloud',
-    subtitle: 'Gemini 4 Hydrogen first → Local fallback',
+    subtitle: 'Gemini 3.5 Flash-Lite first → Local fallback',
   },
   {
     key: 'ONLY_IN_CLOUD',
@@ -90,7 +90,7 @@ export function App() {
   const [uid, setUid] = useState<string | null>(null);
   const [savedSpecs, setSavedSpecs] = useState<SavedSpecRecord[]>([]);
   const [remoteCfg, setRemoteCfg] = useState<RemoteConfigValues>({
-    cloudFallbackModel: 'gemini-3.8-flash',
+    cloudFallbackModel: 'gemini-3.5-flash-lite',
     defaultInferenceMode: 'PREFER_ON_DEVICE',
     studioTagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     fetchedFromRemote: false,

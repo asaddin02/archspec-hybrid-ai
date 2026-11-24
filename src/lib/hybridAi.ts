@@ -310,12 +310,12 @@ Client Brief: ${params.brief}`;
 
   const candidateModels =
     params.mode === 'ONLY_ON_DEVICE'
-      ? [params.cloudModel || 'gemini-3.8-flash']
+      ? [params.cloudModel || 'gemini-3.5-flash-lite']
       : Array.from(
           new Set([
-            params.cloudModel || 'gemini-3.8-flash',
-            'gemini-3.8-flash',
+            params.cloudModel || 'gemini-3.5-flash-lite',
             'gemini-3.5-flash-lite',
+            'gemini-3.8-flash',
             'gemini-4-hydrogen',
           ])
         );
@@ -435,12 +435,12 @@ Provide a concise, high-signal 4-bullet field checklist covering:
 
   const candidateModels =
     params.mode === 'ONLY_ON_DEVICE'
-      ? [params.cloudModel || 'gemini-3.8-flash']
+      ? [params.cloudModel || 'gemini-3.5-flash-lite']
       : Array.from(
           new Set([
-            params.cloudModel || 'gemini-3.8-flash',
-            'gemini-3.8-flash',
+            params.cloudModel || 'gemini-3.5-flash-lite',
             'gemini-3.5-flash-lite',
+            'gemini-3.8-flash',
             'gemini-4-hydrogen',
           ])
         );

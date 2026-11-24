@@ -76,12 +76,15 @@ export function getFirebaseRuntime(): FirebaseRuntime {
 
   const app = initializeApp(firebaseConfig);
 
-  // Initialize Firebase App Check (required for production Firebase AI Logic;
-  // debug tokens are officially accepted for #BuildHybridAI 2026 local & judge testing).
+  // Initialize Firebase App Check when reCAPTCHA Enterprise site key is configured
+  // or when running on localhost with debug tokens (accepted for #BuildHybridAI 2026).
   let appCheck: AppCheck | null = null;
   let appCheckMode: FirebaseRuntime['appCheckMode'] = 'unconfigured';
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY || '';
   const debugTokenEnv = import.meta.env.VITE_APPCHECK_DEBUG_TOKEN || '';
+  const isLocalhost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
   try {
     if (recaptchaSiteKey) {
@@ -90,21 +93,22 @@ export function getFirebaseRuntime(): FirebaseRuntime {
         isTokenAutoRefreshEnabled: true,
       });
       appCheckMode = 'recaptcha-enterprise';
-    } else if (typeof self !== 'undefined') {
+    } else if (isLocalhost && typeof self !== 'undefined') {
       (self as unknown as Record<string, unknown>).FIREBASE_APPCHECK_DEBUG_TOKEN =
         debugTokenEnv === 'true' || !debugTokenEnv ? true : debugTokenEnv;
-      // Register debug provider using a placeholder site key when running in debug-token mode
       appCheck = initializeAppCheck(app, {
         provider: new ReCaptchaEnterpriseProvider('6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI'),
         isTokenAutoRefreshEnabled: true,
       });
+      appCheckMode = 'debug-token';
+    } else {
       appCheckMode = 'debug-token';
     }
   } catch (err) {
     console.warn('[ArchSpec] App Check initialization notice:', err);
   }
 
-  // Initialize Firebase AI Logic with Gemini Developer API (no billing required for gemini-4-hydrogen)
+  // Initialize Firebase AI Logic with Gemini Developer API (no billing required for gemini-3.5-flash-lite)
   const ai = getAI(app, { backend: new GoogleAIBackend() });
 
   // Auth + Offline-first Firestore persistence
@@ -121,7 +125,7 @@ export function getFirebaseRuntime(): FirebaseRuntime {
     remoteConfig = getRemoteConfig(app);
     remoteConfig.settings.minimumFetchIntervalMillis = 60_000;
     remoteConfig.defaultConfig = {
-      cloud_fallback_model: 'gemini-3.8-flash',
+      cloud_fallback_model: 'gemini-3.5-flash-lite',
       default_inference_mode: 'PREFER_ON_DEVICE',
       studio_tagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     };
@@ -157,7 +161,7 @@ export async function ensureAnonymousUser(): Promise<User | null> {
 
 export async function loadRemoteConfigValues(): Promise<RemoteConfigValues> {
   const defaults: RemoteConfigValues = {
-    cloudFallbackModel: 'gemini-3.8-flash',
+    cloudFallbackModel: 'gemini-3.5-flash-lite',
     defaultInferenceMode: 'PREFER_ON_DEVICE',
     studioTagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     fetchedFromRemote: false,

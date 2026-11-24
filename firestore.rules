@@ -1,0 +1,146 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model — ArchSpec Hybrid AI
+// ===============================================================
+//
+// Authentication: Firebase Auth (Anonymous Sign-In enabled).
+// All data is strictly private and scoped per authenticated user UID.
+// All unspecified paths (including parent users/{uid} documents and
+// any nested subcollections) are denied by default.
+//
+// Collection: users/{uid}/specs/{specId}
+// Document ID: auto-generated or client-assigned specId
+// Access Control: Owner-only (request.auth != null && request.auth.uid == uid)
+// Fields (all required; no extraneous fields permitted):
+//   - projectTitle:       string    (required, 1..140 chars)
+//   - architecturalStyle: string    (required, 1..80 chars)
+//   - roomType:           string    (required, 1..80 chars)
+//   - inferenceSource:    string    (required, enum: 'ON_DEVICE' | 'IN_CLOUD' | 'DEMO_LOCAL')
+//   - inferenceMode:      string    (required, enum: 'PREFER_ON_DEVICE' | 'ONLY_ON_DEVICE' | 'PREFER_IN_CLOUD' | 'ONLY_IN_CLOUD')
+//   - latencyMs:          number    (required, int or float, 0..300000)
+//   - specJson:           string    (required, serialized JSON payload, 2..20000 chars)
+//   - createdAt:          timestamp (required, immutable after creation)
+//   - updatedAt:          timestamp (required, must be >= createdAt)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the request is authenticated (supports Anonymous Sign-In and other Firebase Auth providers).
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user owns the path scoped by uid.
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // Verify all required keys exist on the resulting document.
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    // Verify the resulting document contains only explicitly allowed keys (prevents schema pollution).
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    // Validate string type and inclusive min/max length bounds (prevents DoS / 1MB payload attacks).
+    function isValidString(value, minLen, maxLen) {
+      return value is string &&
+        value.size() >= minLen &&
+        value.size() <= maxLen;
+    }
+
+    // Validate strict numeric type (int or float) and inclusive range bounds.
+    function isValidNumberInRange(value, minVal, maxVal) {
+      return (value is int || value is float) &&
+        value >= minVal &&
+        value <= maxVal;
+    }
+
+    // Verify specified immutable fields were not modified or removed on update.
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators (Called in BOTH create and update rules)
+    // ===============================================================
+
+    function allowedSpecFields() {
+      return [
+        'projectTitle',
+        'architecturalStyle',
+        'roomType',
+        'inferenceSource',
+        'inferenceMode',
+        'latencyMs',
+        'specJson',
+        'createdAt',
+        'updatedAt'
+      ];
+    }
+
+    function isValidInferenceSource(value) {
+      return value is string &&
+        value in ['ON_DEVICE', 'IN_CLOUD', 'DEMO_LOCAL'];
+    }
+
+    function isValidInferenceMode(value) {
+      return value is string &&
+        value in ['PREFER_ON_DEVICE', 'ONLY_ON_DEVICE', 'PREFER_IN_CLOUD', 'ONLY_IN_CLOUD'];
+    }
+
+    // Core schema validator for users/{uid}/specs/{specId}.
+    function isValidSpec(data) {
+      return hasOnlyAllowedFields(data, allowedSpecFields()) &&
+        hasRequiredFields(data, allowedSpecFields()) &&
+        isValidString(data.projectTitle, 1, 140) &&
+        isValidString(data.architecturalStyle, 1, 80) &&
+        isValidString(data.roomType, 1, 80) &&
+        isValidInferenceSource(data.inferenceSource) &&
+        isValidInferenceMode(data.inferenceMode) &&
+        isValidNumberInRange(data.latencyMs, 0, 300000) &&
+        isValidString(data.specJson, 2, 20000) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt >= data.createdAt;
+    }
+
+    // Create-specific validation.
+    function isValidSpecCreate(data) {
+      return isValidSpec(data);
+    }
+
+    // Update-specific validation (re-validates entire resulting document and locks createdAt).
+    function isValidSpecUpdate(newData, oldData) {
+      return isValidSpec(newData) &&
+        areImmutableFieldsUnchanged(['createdAt']) &&
+        newData.createdAt == oldData.createdAt;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /users/{uid}/specs/{specId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidSpecCreate(request.resource.data);
+      allow update: if isOwner(uid) && isValidSpecUpdate(request.resource.data, resource.data);
+      allow delete: if isOwner(uid);
+    }
+
+    // Explicit default deny for all other paths and subcollections.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

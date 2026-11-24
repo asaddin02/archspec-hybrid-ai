@@ -1,0 +1,16 @@
+# Dependencies & build output
+node_modules/
+dist/
+.firebase/
+firebase-debug.log*
+ui-debug.log*
+
+# Local environment & secrets (NEVER commit API keys or firebase-config.json)
+.env
+.env.local
+.env.*.local
+firebase-config.json
+
+# OS / IDE
+.DS_Store
+*.log

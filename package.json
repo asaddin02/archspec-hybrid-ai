@@ -1,0 +1,28 @@
+{
+  "name": "archspec-hybrid-ai",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Offline-first Hybrid AI Architectural & 3D Material Studio powered by Firebase AI Logic (On-Device Gemini Nano + Cloud Gemini 4 Hydrogen Fallback), App Check, Remote Config, Firestore, and Three.js.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "firebase": "latest",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0"
+  }
+}

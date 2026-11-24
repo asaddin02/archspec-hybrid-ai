@@ -302,43 +302,78 @@ export async function generateHybridArchSpec(params: {
   const startedAt = performance.now();
   const onlineAtCall = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
-  // Call getGenerativeModel directly on user action as required by Firebase AI Logic Hybrid Inference docs
-  const model = getGenerativeModel(ai, {
-    mode: mapInferenceMode(params.mode),
-    inCloudParams: {
-      model: params.cloudModel || 'gemini-4-hydrogen',
-      generationConfig: {
-        temperature: 0.6,
-        maxOutputTokens: 2048,
-        responseMimeType: 'application/json',
-        responseSchema: ARCH_SPEC_FIREBASE_SCHEMA,
-      },
-    },
-    onDeviceParams: {
-      createOptions: {
-        expectedOutputs: [{ type: 'text', languages: ['en'] }],
-      },
-      promptOptions: {
-        responseConstraint: ARCH_SPEC_ONDEVICE_CONSTRAINT,
-      },
-    },
-  });
-
   const instruction = `You are a Principal Architectural Material & 3D PBR Lighting Director.
 Given the client brief (and optional floor plan / room photo), output ONLY a valid JSON object matching the exact schema with realistic architectural hex colors, PBR roughness (0.05-1.0), PBR metalness (0.0-1.0), Kelvin color temperature (2200-6500), 4-5 distinct material zones, and an NDA privacy audit note.
 
 Room Category: ${params.roomType}
 Client Brief: ${params.brief}`;
 
-  let result;
-  let approxBytes = new TextEncoder().encode(instruction).length;
+  const candidateModels =
+    params.mode === 'ONLY_ON_DEVICE'
+      ? [params.cloudModel || 'gemini-3.8-flash']
+      : Array.from(
+          new Set([
+            params.cloudModel || 'gemini-3.8-flash',
+            'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-4-hydrogen',
+          ])
+        );
 
+  let approxBytes = new TextEncoder().encode(instruction).length;
+  let imgPart: Part | null = null;
   if (params.imageFile) {
-    const imgPart = await fileToGenerativePart(params.imageFile);
+    imgPart = await fileToGenerativePart(params.imageFile);
     approxBytes += params.imageFile.size;
-    result = await model.generateContent([instruction, imgPart]);
-  } else {
-    result = await model.generateContent(instruction);
+  }
+
+  let result: Awaited<ReturnType<ReturnType<typeof getGenerativeModel>['generateContent']>> | null =
+    null;
+  let usedCloudModel = candidateModels[0];
+  let lastError: unknown = null;
+
+  for (const candidate of candidateModels) {
+    usedCloudModel = candidate;
+    // Call getGenerativeModel directly on user action as required by Firebase AI Logic Hybrid Inference docs
+    const model = getGenerativeModel(ai, {
+      mode: mapInferenceMode(params.mode),
+      inCloudParams: {
+        model: candidate,
+        generationConfig: {
+          temperature: 0.6,
+          maxOutputTokens: 2048,
+          responseMimeType: 'application/json',
+          responseSchema: ARCH_SPEC_FIREBASE_SCHEMA,
+        },
+      },
+      onDeviceParams: {
+        createOptions: {
+          expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        },
+        promptOptions: {
+          responseConstraint: ARCH_SPEC_ONDEVICE_CONSTRAINT,
+        },
+      },
+    });
+
+    try {
+      result = imgPart
+        ? await model.generateContent([instruction, imgPart])
+        : await model.generateContent(instruction);
+      break;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient = /500|503|429|high demand|overloaded|unavailable/i.test(msg);
+      if (!isTransient || params.mode === 'ONLY_ON_DEVICE') {
+        throw err;
+      }
+      console.warn(`[ArchSpec] Transient cloud spike on ${candidate}, failing over to next model...`);
+    }
+  }
+
+  if (!result) {
+    throw lastError instanceof Error ? lastError : new Error('Hybrid AI request failed.');
   }
 
   const response = result.response;
@@ -362,7 +397,7 @@ Client Brief: ${params.brief}`;
       modelUsed:
         inferenceSource === 'ON_DEVICE'
           ? 'Gemini Nano (Chrome Prompt API)'
-          : params.cloudModel || 'gemini-4-hydrogen',
+          : usedCloudModel,
       latencyMs,
       timestamp: new Date().toLocaleTimeString(),
       onlineAtCall,
@@ -386,22 +421,6 @@ export async function streamSiteInspectionCritique(params: {
   const startedAt = performance.now();
   const onlineAtCall = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
-  const model = getGenerativeModel(ai, {
-    mode: mapInferenceMode(params.mode),
-    inCloudParams: {
-      model: params.cloudModel || 'gemini-4-hydrogen',
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 900,
-      },
-    },
-    onDeviceParams: {
-      createOptions: {
-        expectedOutputs: [{ type: 'text', languages: ['en'] }],
-      },
-    },
-  });
-
   const prompt = `You are an on-site Senior Architect conducting a fast construction-site inspection review.
 Project: ${params.currentSpec.projectTitle} (${params.currentSpec.architecturalStyle})
 Lighting: ${params.currentSpec.lightingMood} at ${params.currentSpec.sunKelvin}K
@@ -414,13 +433,64 @@ Provide a concise, high-signal 4-bullet field checklist covering:
 3) Acoustic or circulation improvement,
 4) Value-engineering tip to save 10-15% without hurting visual luxury.`;
 
-  const streamResult = await model.generateContentStream(prompt);
-  let accumulated = '';
-  for await (const chunk of streamResult.stream) {
-    accumulated += chunk.text();
-    params.onChunk(accumulated);
+  const candidateModels =
+    params.mode === 'ONLY_ON_DEVICE'
+      ? [params.cloudModel || 'gemini-3.8-flash']
+      : Array.from(
+          new Set([
+            params.cloudModel || 'gemini-3.8-flash',
+            'gemini-3.8-flash',
+            'gemini-3.5-flash-lite',
+            'gemini-4-hydrogen',
+          ])
+        );
+
+  let usedCloudModel = candidateModels[0];
+  let finalResponse: unknown = null;
+  let lastError: unknown = null;
+
+  for (const candidate of candidateModels) {
+    usedCloudModel = candidate;
+    const model = getGenerativeModel(ai, {
+      mode: mapInferenceMode(params.mode),
+      inCloudParams: {
+        model: candidate,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 900,
+        },
+      },
+      onDeviceParams: {
+        createOptions: {
+          expectedOutputs: [{ type: 'text', languages: ['en'] }],
+        },
+      },
+    });
+
+    try {
+      const streamResult = await model.generateContentStream(prompt);
+      let accumulated = '';
+      for await (const chunk of streamResult.stream) {
+        accumulated += chunk.text();
+        params.onChunk(accumulated);
+      }
+      finalResponse = await streamResult.response;
+      break;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient = /500|503|429|high demand|overloaded|unavailable/i.test(msg);
+      if (!isTransient || params.mode === 'ONLY_ON_DEVICE') {
+        throw err;
+      }
+      console.warn(`[ArchSpec] Stream spike on ${candidate}, failing over...`);
+    }
   }
-  const finalResponse = await streamResult.response;
+
+  if (!finalResponse) {
+    throw lastError instanceof Error ? lastError : new Error('Hybrid AI stream failed.');
+  }
+
   const inferenceSource = extractInferenceSource(finalResponse, params.mode);
   const latencyMs = Math.round(performance.now() - startedAt);
 
@@ -430,7 +500,7 @@ Provide a concise, high-signal 4-bullet field checklist covering:
     modelUsed:
       inferenceSource === 'ON_DEVICE'
         ? 'Gemini Nano (Chrome Prompt API)'
-        : params.cloudModel || 'gemini-4-hydrogen',
+        : usedCloudModel,
     latencyMs,
     timestamp: new Date().toLocaleTimeString(),
     onlineAtCall,

@@ -90,7 +90,7 @@ export function App() {
   const [uid, setUid] = useState<string | null>(null);
   const [savedSpecs, setSavedSpecs] = useState<SavedSpecRecord[]>([]);
   const [remoteCfg, setRemoteCfg] = useState<RemoteConfigValues>({
-    cloudFallbackModel: 'gemini-4-hydrogen',
+    cloudFallbackModel: 'gemini-3.8-flash',
     defaultInferenceMode: 'PREFER_ON_DEVICE',
     studioTagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     fetchedFromRemote: false,
@@ -199,6 +199,16 @@ export function App() {
   const handleSaveToFirestore = async () => {
     setErrorMsg(null);
     setIsSaving(true);
+    const tel: HybridTelemetry = telemetry || {
+      inferenceSource: 'DEMO_LOCAL',
+      inferenceMode: mode,
+      modelUsed: remoteCfg.cloudFallbackModel,
+      latencyMs: 0,
+      timestamp: new Date().toLocaleTimeString(),
+      onlineAtCall: online,
+      cloudBytesSent: 0,
+    };
+
     try {
       let currentUid = uid;
       if (!currentUid) {
@@ -206,22 +216,29 @@ export function App() {
         currentUid = user?.uid || null;
         setUid(currentUid);
       }
-      if (!currentUid) {
-        throw new Error('Anonymous Auth session unavailable. Check Firebase Auth setup.');
+
+      if (currentUid) {
+        await saveSpecToFirestore(currentUid, spec, tel);
+        const updated = await loadSavedSpecs(currentUid);
+        setSavedSpecs(updated);
+        setStatusNotice('Saved Material Specification Sheet to Cloud Firestore (offline-synced).');
+      } else {
+        const localRecord: SavedSpecRecord = {
+          id: `local-${Date.now()}`,
+          projectTitle: spec.projectTitle,
+          architecturalStyle: spec.architecturalStyle,
+          roomType: spec.roomType,
+          inferenceSource: tel.inferenceSource,
+          inferenceMode: tel.inferenceMode,
+          latencyMs: tel.latencyMs,
+          spec,
+          createdAt: new Date().toLocaleString(),
+        };
+        const next = [localRecord, ...savedSpecs].slice(0, 12);
+        setSavedSpecs(next);
+        localStorage.setItem('archspec_local_specs', JSON.stringify(next));
+        setStatusNotice('Saved locally on device (enable Firebase Anonymous Auth for cloud sync).');
       }
-      const tel: HybridTelemetry = telemetry || {
-        inferenceSource: 'DEMO_LOCAL',
-        inferenceMode: mode,
-        modelUsed: remoteCfg.cloudFallbackModel,
-        latencyMs: 0,
-        timestamp: new Date().toLocaleTimeString(),
-        onlineAtCall: online,
-        cloudBytesSent: 0,
-      };
-      await saveSpecToFirestore(currentUid, spec, tel);
-      const updated = await loadSavedSpecs(currentUid);
-      setSavedSpecs(updated);
-      setStatusNotice('Saved Material Specification Sheet to Cloud Firestore (offline-synced).');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {

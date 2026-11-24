@@ -121,7 +121,7 @@ export function getFirebaseRuntime(): FirebaseRuntime {
     remoteConfig = getRemoteConfig(app);
     remoteConfig.settings.minimumFetchIntervalMillis = 60_000;
     remoteConfig.defaultConfig = {
-      cloud_fallback_model: 'gemini-4-hydrogen',
+      cloud_fallback_model: 'gemini-3.8-flash',
       default_inference_mode: 'PREFER_ON_DEVICE',
       studio_tagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     };
@@ -157,7 +157,7 @@ export async function ensureAnonymousUser(): Promise<User | null> {
 
 export async function loadRemoteConfigValues(): Promise<RemoteConfigValues> {
   const defaults: RemoteConfigValues = {
-    cloudFallbackModel: 'gemini-4-hydrogen',
+    cloudFallbackModel: 'gemini-3.8-flash',
     defaultInferenceMode: 'PREFER_ON_DEVICE',
     studioTagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
     fetchedFromRemote: false,

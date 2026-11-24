@@ -303,22 +303,51 @@ export async function generateHybridArchSpec(params: {
   const onlineAtCall = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
   const instruction = `You are a Principal Architectural Material & 3D PBR Lighting Director.
-Given the client brief (and optional floor plan / room photo), output ONLY a valid JSON object matching the exact schema with realistic architectural hex colors, PBR roughness (0.05-1.0), PBR metalness (0.0-1.0), Kelvin color temperature (2200-6500), 4-5 distinct material zones, and an NDA privacy audit note.
+Given the client brief (and optional floor plan / room photo), output ONLY a valid JSON object matching this exact structure (no markdown fences):
+{
+  "projectTitle": "string",
+  "architecturalStyle": "string",
+  "roomType": "string",
+  "summary": "string (2 sentences)",
+  "lightingMood": "daylight" | "golden_hour" | "dusk",
+  "sunKelvin": 2700,
+  "estimatedBudgetUsd": "$XX,000 - $XX,000",
+  "privacyAuditNote": "string",
+  "palette": {
+    "wallHex": "#RRGGBB",
+    "floorHex": "#RRGGBB",
+    "woodHex": "#RRGGBB",
+    "accentHex": "#RRGGBB",
+    "waterHex": "#RRGGBB",
+    "ambientIntensity": 0.65,
+    "sunIntensity": 1.8
+  },
+  "materials": [
+    {
+      "zone": "string",
+      "materialName": "string",
+      "finish": "string",
+      "pbrRoughness": 0.65,
+      "pbrMetalness": 0.05,
+      "lightingSpec": "string",
+      "estimatedCostPerSqmUsd": 95
+    }
+  ]
+}
+Include 4-5 distinct material zones with realistic architectural hex colors, PBR roughness (0.05-1.0), PBR metalness (0.0-1.0), and Kelvin color temperature (2200-6500).
 
 Room Category: ${params.roomType}
 Client Brief: ${params.brief}`;
 
-  const candidateModels =
+  const attempts: { model: string; useSchema: boolean }[] =
     params.mode === 'ONLY_ON_DEVICE'
-      ? [params.cloudModel || 'gemini-3.5-flash-lite']
-      : Array.from(
-          new Set([
-            params.cloudModel || 'gemini-3.5-flash-lite',
-            'gemini-3.5-flash-lite',
-            'gemini-3.8-flash',
-            'gemini-4-hydrogen',
-          ])
-        );
+      ? [{ model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: true }]
+      : [
+          { model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: true },
+          { model: 'gemini-3.5-flash-lite', useSchema: false },
+          { model: 'gemini-3.8-flash', useSchema: false },
+          { model: 'gemini-4-hydrogen', useSchema: false },
+        ];
 
   let approxBytes = new TextEncoder().encode(instruction).length;
   let imgPart: Part | null = null;
@@ -329,22 +358,28 @@ Client Brief: ${params.brief}`;
 
   let result: Awaited<ReturnType<ReturnType<typeof getGenerativeModel>['generateContent']>> | null =
     null;
-  let usedCloudModel = candidateModels[0];
+  let usedCloudModel = attempts[0].model;
   let lastError: unknown = null;
 
-  for (const candidate of candidateModels) {
-    usedCloudModel = candidate;
+  for (const attempt of attempts) {
+    usedCloudModel = attempt.model;
     // Call getGenerativeModel directly on user action as required by Firebase AI Logic Hybrid Inference docs
     const model = getGenerativeModel(ai, {
       mode: mapInferenceMode(params.mode),
       inCloudParams: {
-        model: candidate,
-        generationConfig: {
-          temperature: 0.6,
-          maxOutputTokens: 2048,
-          responseMimeType: 'application/json',
-          responseSchema: ARCH_SPEC_FIREBASE_SCHEMA,
-        },
+        model: attempt.model,
+        generationConfig: attempt.useSchema
+          ? {
+              temperature: 0.6,
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json',
+              responseSchema: ARCH_SPEC_FIREBASE_SCHEMA,
+            }
+          : {
+              temperature: 0.6,
+              maxOutputTokens: 2048,
+              responseMimeType: 'application/json',
+            },
       },
       onDeviceParams: {
         createOptions: {
@@ -363,12 +398,12 @@ Client Brief: ${params.brief}`;
       break;
     } catch (err) {
       lastError = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const isTransient = /500|503|429|high demand|overloaded|unavailable/i.test(msg);
-      if (!isTransient || params.mode === 'ONLY_ON_DEVICE') {
+      if (params.mode === 'ONLY_ON_DEVICE') {
         throw err;
       }
-      console.warn(`[ArchSpec] Transient cloud spike on ${candidate}, failing over to next model...`);
+      console.warn(
+        `[ArchSpec] Cloud attempt (${attempt.model}, schema=${attempt.useSchema}) failed, trying next fallback...`
+      );
     }
   }
 
@@ -448,16 +483,18 @@ Provide a concise, high-signal 4-bullet field checklist covering:
   let usedCloudModel = candidateModels[0];
   let finalResponse: unknown = null;
   let lastError: unknown = null;
+  let accumulated = '';
 
   for (const candidate of candidateModels) {
     usedCloudModel = candidate;
+    accumulated = '';
     const model = getGenerativeModel(ai, {
       mode: mapInferenceMode(params.mode),
       inCloudParams: {
         model: candidate,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 900,
+          maxOutputTokens: 1600,
         },
       },
       onDeviceParams: {
@@ -469,7 +506,6 @@ Provide a concise, high-signal 4-bullet field checklist covering:
 
     try {
       const streamResult = await model.generateContentStream(prompt);
-      let accumulated = '';
       for await (const chunk of streamResult.stream) {
         accumulated += chunk.text();
         params.onChunk(accumulated);
@@ -477,17 +513,20 @@ Provide a concise, high-signal 4-bullet field checklist covering:
       finalResponse = await streamResult.response;
       break;
     } catch (err) {
+      // If we already streamed meaningful text and only hit a trailing SSE parse frame, treat as complete
+      if (accumulated.length > 60) {
+        finalResponse = { inferenceSource: params.mode === 'ONLY_ON_DEVICE' ? 'ON_DEVICE' : 'IN_CLOUD' };
+        break;
+      }
       lastError = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const isTransient = /500|503|429|high demand|overloaded|unavailable/i.test(msg);
-      if (!isTransient || params.mode === 'ONLY_ON_DEVICE') {
+      if (params.mode === 'ONLY_ON_DEVICE') {
         throw err;
       }
-      console.warn(`[ArchSpec] Stream spike on ${candidate}, failing over...`);
+      console.warn(`[ArchSpec] Stream attempt on ${candidate} failed, failing over...`);
     }
   }
 
-  if (!finalResponse) {
+  if (!finalResponse && accumulated.length <= 60) {
     throw lastError instanceof Error ? lastError : new Error('Hybrid AI stream failed.');
   }
 

@@ -341,9 +341,9 @@ Client Brief: ${params.brief}`;
 
   const attempts: { model: string; useSchema: boolean }[] =
     params.mode === 'ONLY_ON_DEVICE'
-      ? [{ model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: true }]
+      ? [{ model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: false }]
       : [
-          { model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: true },
+          { model: params.cloudModel || 'gemini-3.5-flash-lite', useSchema: false },
           { model: 'gemini-3.5-flash-lite', useSchema: false },
           { model: 'gemini-3.8-flash', useSchema: false },
           { model: 'gemini-4-hydrogen', useSchema: false },
@@ -370,15 +370,14 @@ Client Brief: ${params.brief}`;
         model: attempt.model,
         generationConfig: attempt.useSchema
           ? {
-              temperature: 0.6,
-              maxOutputTokens: 2048,
+              temperature: 0.5,
+              maxOutputTokens: 1600,
               responseMimeType: 'application/json',
               responseSchema: ARCH_SPEC_FIREBASE_SCHEMA,
             }
           : {
-              temperature: 0.6,
-              maxOutputTokens: 2048,
-              responseMimeType: 'application/json',
+              temperature: 0.5,
+              maxOutputTokens: 1600,
             },
       },
       onDeviceParams: {
@@ -402,7 +401,7 @@ Client Brief: ${params.brief}`;
         throw err;
       }
       console.warn(
-        `[ArchSpec] Cloud attempt (${attempt.model}, schema=${attempt.useSchema}) failed, trying next fallback...`
+        `[ArchSpec] Cloud attempt (${attempt.model}) failed, trying next fallback...`
       );
     }
   }
@@ -413,11 +412,17 @@ Client Brief: ${params.brief}`;
 
   const response = result.response;
   const rawText = response.text().trim();
-  const cleaned = rawText
+  const stripped = rawText
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/```\s*$/i, '')
     .trim();
+  const firstBrace = stripped.indexOf('{');
+  const lastBrace = stripped.lastIndexOf('}');
+  const cleaned =
+    firstBrace !== -1 && lastBrace > firstBrace
+      ? stripped.slice(firstBrace, lastBrace + 1)
+      : stripped;
 
   const parsed = JSON.parse(cleaned) as Partial<ArchMaterialSpec>;
   const spec = normalizeSpec(parsed, params.roomType);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Cpu,
   Cloud,
@@ -10,8 +10,12 @@ import {
   Save,
   Trash2,
   FileText,
-  Layers,
   MessageSquare,
+  Sun,
+  Moon,
+  Upload,
+  X,
+  RefreshCw,
 } from 'lucide-react';
 import { Arch3DViewport } from './components/Arch3DViewport';
 import {
@@ -39,38 +43,64 @@ import {
   type ArchMaterialSpec,
   type HybridModeKey,
   type HybridTelemetry,
+  type LightingMood,
   type SavedSpecRecord,
+  type ScenePalette,
 } from './types/spec';
+
+type ThemePref = 'light' | 'dark';
+
+const LOCAL_STORAGE_KEY = 'archspec_local_specs_v2';
 
 const MODE_OPTIONS: { key: HybridModeKey; title: string; subtitle: string }[] = [
   {
     key: 'PREFER_ON_DEVICE',
-    title: 'Prefer On-Device',
-    subtitle: 'Local Gemini Nano first → Cloud fallback',
+    title: 'Prefer on-device',
+    subtitle: 'Gemini Nano first, cloud fallback',
   },
   {
     key: 'ONLY_ON_DEVICE',
-    title: 'Only On-Device',
-    subtitle: 'Strict offline / NDA air-gapped mode',
+    title: 'Only on-device',
+    subtitle: 'Strict air-gapped NDA mode',
   },
   {
     key: 'PREFER_IN_CLOUD',
-    title: 'Prefer In-Cloud',
-    subtitle: 'Gemini 3.5 Flash-Lite first → Local fallback',
+    title: 'Prefer in-cloud',
+    subtitle: 'Cloud Gemini first, local fallback',
   },
   {
     key: 'ONLY_IN_CLOUD',
-    title: 'Only In-Cloud',
-    subtitle: 'Cloud reference benchmark mode',
+    title: 'Only in-cloud',
+    subtitle: 'Cloud reference benchmark',
   },
 ];
 
+function readLocalSpecs(): SavedSpecRecord[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function App() {
+  const [theme, setTheme] = useState<ThemePref>(() => {
+    if (typeof window === 'undefined') return 'light';
+    const saved = localStorage.getItem('archspec_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
   const [spec, setSpec] = useState<ArchMaterialSpec>(DEFAULT_ARCH_SPEC);
   const [brief, setBrief] = useState<string>(PRESET_BRIEFS[0].prompt);
   const [roomType, setRoomType] = useState<string>(PRESET_BRIEFS[0].roomType);
+  const [activePresetId, setActivePresetId] = useState<string>(PRESET_BRIEFS[0].id);
   const [mode, setMode] = useState<HybridModeKey>('PREFER_ON_DEVICE');
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
   const [telemetry, setTelemetry] = useState<HybridTelemetry | null>(null);
   const [critiqueText, setCritiqueText] = useState<string>('');
@@ -88,15 +118,30 @@ export function App() {
   const [onDeviceStatus, setOnDeviceStatus] = useState<OnDeviceStatus>('unsupported');
   const [downloadPct, setDownloadPct] = useState<number | null>(null);
   const [uid, setUid] = useState<string | null>(null);
-  const [savedSpecs, setSavedSpecs] = useState<SavedSpecRecord[]>([]);
+  const [savedSpecs, setSavedSpecs] = useState<SavedSpecRecord[]>(() => readLocalSpecs());
   const [remoteCfg, setRemoteCfg] = useState<RemoteConfigValues>({
     cloudFallbackModel: 'gemini-3.5-flash-lite',
     defaultInferenceMode: 'PREFER_ON_DEVICE',
-    studioTagline: 'Offline-First Hybrid AI Architectural & 3D Material Studio',
+    studioTagline: 'Offline-first architectural 3D & material studio',
     fetchedFromRemote: false,
   });
 
   const runtime = getFirebaseRuntime();
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('archspec_theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(imageFile);
+    setImagePreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [imageFile]);
 
   useEffect(() => {
     const onOnline = () => setOnline(true);
@@ -115,8 +160,15 @@ export function App() {
       if (user) {
         setUid(user.uid);
         try {
-          const list = await loadSavedSpecs(user.uid);
-          setSavedSpecs(list);
+          const cloudList = await loadSavedSpecs(user.uid);
+          const taggedCloud = cloudList.map((item) => ({
+            ...item,
+            storageOrigin: 'firestore' as const,
+          }));
+          const localOnly = readLocalSpecs().filter(
+            (loc) => !taggedCloud.some((c) => c.id === loc.id)
+          );
+          setSavedSpecs([...taggedCloud, ...localOnly].slice(0, 12));
         } catch {
           // Offline cache may be empty on first visit
         }
@@ -129,6 +181,33 @@ export function App() {
     };
   }, []);
 
+  const averageSqmCost = useMemo(() => {
+    if (!spec.materials.length) return 0;
+    const total = spec.materials.reduce((sum, m) => sum + m.estimatedCostPerSqmUsd, 0);
+    return Math.round(total / spec.materials.length);
+  }, [spec.materials]);
+
+  const handleUpdatePalette = (
+    key: keyof Pick<ScenePalette, 'wallHex' | 'floorHex' | 'woodHex' | 'accentHex' | 'waterHex'>,
+    hex: string
+  ) => {
+    setSpec((prev) => ({
+      ...prev,
+      palette: {
+        ...prev.palette,
+        [key]: hex,
+      },
+    }));
+  };
+
+  const handleUpdateLighting = (mood: LightingMood, sunKelvin: number) => {
+    setSpec((prev) => ({
+      ...prev,
+      lightingMood: mood,
+      sunKelvin,
+    }));
+  };
+
   const handleDownloadLocalModel = async () => {
     setErrorMsg(null);
     setDownloadPct(0);
@@ -136,15 +215,19 @@ export function App() {
       const nextStatus = await triggerOnDeviceModelDownload((pct) => setDownloadPct(pct));
       setOnDeviceStatus(nextStatus);
       setDownloadPct(null);
-      setStatusNotice('On-device Gemini Nano model is ready in Chrome!');
+      setStatusNotice('On-device Gemini Nano model is ready in Chrome.');
     } catch (err) {
       setDownloadPct(null);
       setErrorMsg(err instanceof Error ? err.message : 'Could not trigger local model download.');
     }
   };
 
-  const handleGenerateSpec = async () => {
-    if (!brief.trim()) return;
+  const handleGenerateSpec = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!brief.trim()) {
+      setErrorMsg('Enter an architectural brief or select a preset before generating.');
+      return;
+    }
     setErrorMsg(null);
     setStatusNotice(null);
     setIsGenerating(true);
@@ -159,15 +242,23 @@ export function App() {
       });
       setSpec(generated);
       setTelemetry(tel);
-      setStatusNotice(
-        `3D PBR scene & material spec updated via ${tel.inferenceSource} (${tel.modelUsed}) in ${tel.latencyMs}ms.`
-      );
+      if (tel.inferenceSource === 'DEMO_LOCAL') {
+        setStatusNotice(
+          `Applied local studio fallback in ${tel.latencyMs} ms (${tel.fallbackReason || 'cloud temporarily busy'}). You can retry live Firebase AI anytime.`
+        );
+      } else {
+        setStatusNotice(
+          `Updated 3D PBR scene and specification via ${
+            tel.inferenceSource === 'ON_DEVICE' ? 'On-Device Gemini Nano' : tel.modelUsed
+          } in ${tel.latencyMs} ms.`
+        );
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setErrorMsg(
         mode === 'ONLY_ON_DEVICE'
-          ? `On-device model unavailable (${onDeviceStatus}). Switch to "Prefer On-Device" to trigger seamless Firebase AI Logic cloud fallback (${remoteCfg.cloudFallbackModel}). Details: ${message}`
-          : `Hybrid AI error: ${message}`
+          ? `Strict on-device mode blocked cloud fallback because Chrome Gemini Nano is currently "${onDeviceStatus}". Switch to "Prefer on-device" to use Firebase AI Logic cloud fallback (${remoteCfg.cloudFallbackModel}).`
+          : `Hybrid AI request could not complete: ${message}`
       );
     } finally {
       setIsGenerating(false);
@@ -219,9 +310,13 @@ export function App() {
 
       if (currentUid) {
         await saveSpecToFirestore(currentUid, spec, tel);
-        const updated = await loadSavedSpecs(currentUid);
-        setSavedSpecs(updated);
-        setStatusNotice('Saved Material Specification Sheet to Cloud Firestore (offline-synced).');
+        const updated = (await loadSavedSpecs(currentUid)).map((item) => ({
+          ...item,
+          storageOrigin: 'firestore' as const,
+        }));
+        const localOnly = readLocalSpecs().filter((l) => !updated.some((c) => c.id === l.id));
+        setSavedSpecs([...updated, ...localOnly].slice(0, 12));
+        setStatusNotice('Saved material specification to Cloud Firestore (offline-synced).');
       } else {
         const localRecord: SavedSpecRecord = {
           id: `local-${Date.now()}`,
@@ -233,11 +328,12 @@ export function App() {
           latencyMs: tel.latencyMs,
           spec,
           createdAt: new Date().toLocaleString(),
+          storageOrigin: 'local',
         };
-        const next = [localRecord, ...savedSpecs].slice(0, 12);
-        setSavedSpecs(next);
-        localStorage.setItem('archspec_local_specs', JSON.stringify(next));
-        setStatusNotice('Saved locally on device (enable Firebase Anonymous Auth for cloud sync).');
+        const nextLocal = [localRecord, ...readLocalSpecs()].slice(0, 12);
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(nextLocal));
+        setSavedSpecs((prev) => [localRecord, ...prev].slice(0, 12));
+        setStatusNotice('Saved locally on this device.');
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -246,32 +342,42 @@ export function App() {
     }
   };
 
-  const handleDeleteSaved = async (specId: string) => {
-    if (!uid) return;
-    await deleteSavedSpec(uid, specId);
-    setSavedSpecs((prev) => prev.filter((item) => item.id !== specId));
+  const handleDeleteSaved = async (record: SavedSpecRecord) => {
+    setErrorMsg(null);
+    try {
+      if (record.storageOrigin === 'local' || record.id.startsWith('local-')) {
+        const remaining = readLocalSpecs().filter((item) => item.id !== record.id);
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(remaining));
+      } else if (uid) {
+        await deleteSavedSpec(uid, record.id);
+      }
+      setSavedSpecs((prev) => prev.filter((item) => item.id !== record.id));
+      setStatusNotice(`Removed "${record.projectTitle}" from saved archive.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to delete saved specification.');
+    }
   };
 
   const exportMarkdown = () => {
     const md = [
       `# ${spec.projectTitle}`,
-      `**Style:** ${spec.architecturalStyle} | **Zone:** ${spec.roomType}`,
-      `**Lighting:** ${spec.lightingMood} (${spec.sunKelvin}K) | **Est. Budget:** ${spec.estimatedBudgetUsd}`,
+      `Style: ${spec.architecturalStyle} | Zone: ${spec.roomType}`,
+      `Lighting: ${spec.lightingMood.replace('_', ' ')} (${spec.sunKelvin}K) | Est. Budget: ${spec.estimatedBudgetUsd}`,
       '',
       `> ${spec.summary}`,
       '',
-      '## Material & Lighting Specification Sheet',
+      '## Material & Lighting Specification Schedule',
       '| Zone | Material | Finish | PBR Roughness / Metalness | Lighting Spec | Est. USD / m² |',
       '|---|---|---|---|---|---:|',
       ...spec.materials.map(
         (m) =>
-          `| ${m.zone} | ${m.materialName} | ${m.finish} | R:${m.pbrRoughness.toFixed(2)} / M:${m.pbrMetalness.toFixed(2)} | ${m.lightingSpec} | $${m.estimatedCostPerSqmUsd} |`
+          `| ${m.zone} | ${m.materialName} | ${m.finish} | R ${m.pbrRoughness.toFixed(2)} / M ${m.pbrMetalness.toFixed(2)} | ${m.lightingSpec} | $${m.estimatedCostPerSqmUsd} |`
       ),
       '',
-      `**Palette:** Wall \`${spec.palette.wallHex}\` · Floor \`${spec.palette.floorHex}\` · Timber \`${spec.palette.woodHex}\` · Accent \`${spec.palette.accentHex}\` · Pool \`${spec.palette.waterHex}\``,
-      `**Privacy Audit:** ${spec.privacyAuditNote}`,
+      `Palette: Wall ${spec.palette.wallHex}, Floor ${spec.palette.floorHex}, Timber ${spec.palette.woodHex}, Accent ${spec.palette.accentHex}, Pool ${spec.palette.waterHex}`,
+      `Privacy Audit: ${spec.privacyAuditNote}`,
       '',
-      `Generated with ArchSpec Hybrid AI (Firebase AI Logic) — Dream House 3D Lab`,
+      'Generated with ArchSpec Hybrid AI (Firebase AI Logic) — Dream House 3D Lab',
     ].join('\n');
 
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
@@ -290,333 +396,470 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `archspec-pbr-preset.json`;
+    a.download = 'archspec-pbr-preset.json';
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const critiqueLines = useMemo(() => {
+    if (!critiqueText) return [];
+    return critiqueText
+      .split(/\n+/)
+      .map((line) => line.replace(/^\*+\s*/, '').replace(/\*\*/g, '').trim())
+      .filter(Boolean);
+  }, [critiqueText]);
+
   return (
-    <div className="app-shell">
-      {/* Top Status & Telemetry Header */}
-      <header className="top-header">
-        <div className="brand-block">
-          <div className="brand-icon" aria-hidden="true">
-            <Layers size={22} />
+    <div className="studio-shell">
+      <a href="#studio-main" className="skip-link">
+        Skip to architectural workspace
+      </a>
+
+      {/* Architectural Masthead */}
+      <header className="studio-masthead">
+        <div className="masthead-inner">
+          <div className="brand-lockup">
+            <svg
+              className="brand-mark"
+              width="34"
+              height="34"
+              viewBox="0 0 34 34"
+              fill="none"
+              aria-hidden="true"
+            >
+              <rect x="0.75" y="0.75" width="32.5" height="32.5" rx="3" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 25L17 9L26 25H8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="miter" />
+              <rect x="15.2" y="19" width="3.6" height="3.6" fill="var(--accent)" />
+            </svg>
+            <div>
+              <h1 className="brand-title">ArchSpec Hybrid AI</h1>
+              <p className="brand-subtitle">{remoteCfg.studioTagline}</p>
+            </div>
           </div>
-          <div>
-            <h1>ArchSpec Hybrid AI</h1>
-            <p>{remoteCfg.studioTagline}</p>
-          </div>
-        </div>
 
-        <div className="status-pills">
-          <span className={`status-badge ${online ? 'ok' : 'warn'}`}>
-            {online ? <Wifi size={14} /> : <WifiOff size={14} />}
-            {online ? 'Online' : 'Offline Site Mode'}
-          </span>
+          <div className="masthead-right">
+            <ul className="runtime-strip" aria-label="Runtime status">
+              <li className={online ? 'state-ok' : 'state-warn'}>
+                {online ? <Wifi size={13} aria-hidden="true" /> : <WifiOff size={13} aria-hidden="true" />}
+                <span>{online ? 'Online' : 'Offline site mode'}</span>
+              </li>
+              <li className={onDeviceStatus === 'available' ? 'state-ok' : ''}>
+                <Cpu size={13} aria-hidden="true" />
+                <span>Nano: {onDeviceStatus}</span>
+              </li>
+              <li>
+                <Cloud size={13} aria-hidden="true" />
+                <span className="mono">{remoteCfg.cloudFallbackModel}</span>
+              </li>
+              <li className={isFirebaseConfigured ? 'state-ok' : 'state-warn'}>
+                <ShieldCheck size={13} aria-hidden="true" />
+                <span>App Check: {runtime.appCheckMode}</span>
+              </li>
+            </ul>
 
-          <span className={`status-badge ${onDeviceStatus === 'available' ? 'ok' : ''}`}>
-            <Cpu size={14} />
-            On-Device: {onDeviceStatus}
-          </span>
+            {onDeviceStatus === 'downloadable' && (
+              <button
+                type="button"
+                className="btn-compact"
+                onClick={handleDownloadLocalModel}
+                disabled={downloadPct !== null}
+              >
+                {downloadPct !== null ? `Downloading ${downloadPct}%` : 'Download Gemini Nano'}
+              </button>
+            )}
 
-          {onDeviceStatus === 'downloadable' && (
             <button
               type="button"
-              className="btn-mini"
-              onClick={handleDownloadLocalModel}
-              disabled={downloadPct !== null}
+              className="theme-switch"
+              onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
+              aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} studio theme`}
             >
-              {downloadPct !== null ? `Downloading ${downloadPct}%` : 'Download Gemini Nano'}
+              {theme === 'light' ? <Moon size={15} aria-hidden="true" /> : <Sun size={15} aria-hidden="true" />}
+              <span>{theme === 'light' ? 'Dark' : 'Light'}</span>
             </button>
-          )}
-
-          <span className="status-badge">
-            <Cloud size={14} />
-            Cloud Fallback: {remoteCfg.cloudFallbackModel}
-          </span>
-
-          <span className={`status-badge ${isFirebaseConfigured ? 'ok' : 'warn'}`}>
-            <ShieldCheck size={14} />
-            App Check: {runtime.appCheckMode}
-          </span>
+          </div>
         </div>
       </header>
 
-      {/* Main Split Studio */}
-      <main className="workspace-grid">
-        {/* Left: Hybrid AI Controls & Brief Composer */}
-        <section className="panel-card" aria-label="Hybrid AI Studio Controls">
-          <h2 className="section-title">
-            <span>1. Firebase AI Logic Routing</span>
-          </h2>
+      {/* Main Asymmetric Architectural Workbench */}
+      <main id="studio-main" className="studio-container">
+        <div className="workbench-grid">
+          {/* Left Console: Hybrid AI Routing & Brief Composer */}
+          <aside className="brief-console" aria-label="Hybrid AI Specification Console">
+            <form onSubmit={handleGenerateSpec} noValidate>
+              <fieldset className="console-block">
+                <legend className="block-heading">Inference routing</legend>
+                <div className="mode-selector" role="radiogroup" aria-label="Firebase AI Logic inference mode">
+                  {MODE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === opt.key}
+                      className={`mode-option ${mode === opt.key ? 'is-selected' : ''}`}
+                      onClick={() => setMode(opt.key)}
+                    >
+                      <span className="mode-title">{opt.title}</span>
+                      <span className="mode-desc">{opt.subtitle}</span>
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
 
-          <div className="mode-grid" role="radiogroup" aria-label="Hybrid Inference Mode">
-            {MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                role="radio"
-                aria-checked={mode === opt.key}
-                className={`mode-btn ${mode === opt.key ? 'active' : ''}`}
-                onClick={() => setMode(opt.key)}
-              >
-                <strong>{opt.title}</strong>
-                <span>{opt.subtitle}</span>
-              </button>
-            ))}
-          </div>
+              <div className="console-block">
+                <div className="block-header-inline">
+                  <span className="block-heading">Architectural brief</span>
+                  <span className="block-hint">Select preset or write custom</span>
+                </div>
 
-          <h2 className="section-title">
-            <span>2. Architectural Brief & Floor Plan</span>
-          </h2>
+                <div className="preset-list" role="group" aria-label="Sample architectural briefs">
+                  {PRESET_BRIEFS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`preset-btn ${activePresetId === p.id ? 'is-active' : ''}`}
+                      aria-pressed={activePresetId === p.id}
+                      onClick={() => {
+                        setActivePresetId(p.id);
+                        setBrief(p.prompt);
+                        setRoomType(p.roomType);
+                        setErrorMsg(null);
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
 
-          <div className="preset-row">
-            {PRESET_BRIEFS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className="preset-chip"
-                onClick={() => {
-                  setBrief(p.prompt);
-                  setRoomType(p.roomType);
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="room-type-input">
+                    Space or project category
+                  </label>
+                  <input
+                    id="room-type-input"
+                    className="field-input"
+                    type="text"
+                    value={roomType}
+                    onChange={(e) => {
+                      setRoomType(e.target.value);
+                      setActivePresetId('');
+                    }}
+                    placeholder="e.g. Off-Plan Tropical Villa, Dental Wellness Lounge"
+                  />
+                </div>
 
-          <label className="field-label" htmlFor="room-type-input">
-            Space / Project Type
-          </label>
-          <input
-            id="room-type-input"
-            className="text-input"
-            type="text"
-            value={roomType}
-            onChange={(e) => setRoomType(e.target.value)}
-            placeholder="e.g. Luxury Off-Plan Villa, Dental Clinic Lounge"
-          />
+                <div className="field-group">
+                  <label className="field-label" htmlFor="brief-textarea">
+                    Client design brief &amp; site notes
+                  </label>
+                  <textarea
+                    id="brief-textarea"
+                    className="field-textarea"
+                    rows={5}
+                    value={brief}
+                    aria-describedby="brief-helper"
+                    onChange={(e) => {
+                      setBrief(e.target.value);
+                      setActivePresetId('');
+                    }}
+                    placeholder="Specify architectural style, climate, finishes, lighting temperature, or NDA constraints..."
+                  />
+                  <p id="brief-helper" className="field-hint">
+                    Generates live PBR hex palette, roughness/metalness values, lighting Kelvin, and itemized finish schedule.
+                  </p>
+                </div>
 
-          <label className="field-label" htmlFor="brief-textarea">
-            Client Design Brief or Site Inspection Notes
-          </label>
-          <textarea
-            id="brief-textarea"
-            className="text-area"
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            placeholder="Describe architecture style, climate, materials, lighting mood, or NDA requirements..."
-          />
-
-          <div className="upload-box">
-            <div>
-              <strong>Multimodal Input (Optional)</strong>
-              <div style={{ color: 'var(--muted)', fontSize: '0.73rem' }}>
-                {imageFile ? imageFile.name : 'Upload PNG/JPEG floor plan or site photo'}
+                {/* Multimodal Floor Plan / Site Photo Input */}
+                <div className="field-group">
+                  <span className="field-label">Reference floor plan or site photo (optional)</span>
+                  {imagePreviewUrl && imageFile ? (
+                    <div className="upload-preview">
+                      <img src={imagePreviewUrl} alt={`Uploaded reference ${imageFile.name}`} />
+                      <div className="upload-preview-meta">
+                        <span className="upload-filename">{imageFile.name}</span>
+                        <span className="mono upload-size">
+                          {(imageFile.size / 1024).toFixed(0)} KB
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-clear"
+                        onClick={() => setImageFile(null)}
+                        aria-label="Remove uploaded reference image"
+                      >
+                        <X size={15} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="upload-dropzone" htmlFor="multimodal-file-input">
+                      <Upload size={15} aria-hidden="true" />
+                      <span>Attach PNG or JPEG reference image</span>
+                      <input
+                        id="multimodal-file-input"
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+                      />
+                    </label>
+                  )}
+                </div>
               </div>
-            </div>
-            <input
-              type="file"
-              accept="image/png,image/jpeg"
-              aria-label="Upload floor plan or site photo"
-              onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+
+              {/* Primary Studio Actions */}
+              <div className="console-actions">
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={isGenerating || isStreaming}
+                >
+                  <Sparkles size={16} aria-hidden="true" />
+                  <span>{isGenerating ? 'Synthesizing spec…' : 'Generate 3D spec'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleStreamCritique}
+                  disabled={isGenerating || isStreaming}
+                >
+                  <MessageSquare size={15} aria-hidden="true" />
+                  <span>{isStreaming ? 'Streaming review…' : 'Stream site critique'}</span>
+                </button>
+              </div>
+
+              {statusNotice && (
+                <div className="notice-box" role="status" aria-live="polite">
+                  <span>{statusNotice}</span>
+                  {telemetry?.inferenceSource === 'DEMO_LOCAL' && (
+                    <button
+                      type="button"
+                      className="btn-inline-retry"
+                      onClick={() => handleGenerateSpec()}
+                      disabled={isGenerating}
+                    >
+                      <RefreshCw size={13} aria-hidden="true" />
+                      <span>Retry live AI</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {errorMsg && (
+                <div className="alert-box" role="alert">
+                  {errorMsg}
+                </div>
+              )}
+            </form>
+          </aside>
+
+          {/* Right Dominant Column: Interactive 3D Viewport + Streaming Site Critique */}
+          <div className="stage-column">
+            <Arch3DViewport
+              spec={spec}
+              telemetry={telemetry}
+              isGenerating={isGenerating}
+              onUpdatePalette={handleUpdatePalette}
+              onUpdateLighting={handleUpdateLighting}
             />
+
+            {(critiqueLines.length > 0 || isStreaming) && (
+              <section className="critique-panel" aria-live="polite" aria-label="Streaming Construction-Site Critique">
+                <div className="critique-header">
+                  <h2>Construction-site inspection critique</h2>
+                  {critiqueTelemetry && (
+                    <span className="mono critique-meta">
+                      {critiqueTelemetry.inferenceSource === 'ON_DEVICE'
+                        ? 'On-device'
+                        : critiqueTelemetry.inferenceSource === 'IN_CLOUD'
+                        ? critiqueTelemetry.modelUsed
+                        : 'Local fallback'}{' '}
+                      ({critiqueTelemetry.latencyMs} ms)
+                    </span>
+                  )}
+                </div>
+
+                {critiqueLines.length === 0 ? (
+                  <p className="critique-placeholder">Streaming architectural inspection notes…</p>
+                ) : (
+                  <ol className="critique-list">
+                    {critiqueLines.map((line, i) => (
+                      <li key={i}>{line.replace(/^\d+[\.)]\s*/, '')}</li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            )}
           </div>
+        </div>
 
-          <div className="action-row">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleGenerateSpec}
-              disabled={isGenerating || isStreaming}
-            >
-              <Sparkles size={16} />
-              {isGenerating ? 'Synthesizing...' : 'Generate 3D Spec'}
-            </button>
-
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={handleStreamCritique}
-              disabled={isGenerating || isStreaming}
-            >
-              <MessageSquare size={16} />
-              {isStreaming ? 'Streaming...' : 'Site Critique'}
-            </button>
-          </div>
-
-          {statusNotice && (
-            <div className="privacy-note" role="status">
-              {statusNotice}
+        {/* Architectural Material & Lighting Schedule */}
+        <section className="schedule-section" aria-labelledby="schedule-heading">
+          <div className="schedule-header">
+            <div className="schedule-intro">
+              <span className="schedule-kicker">{spec.architecturalStyle}</span>
+              <h2 id="schedule-heading">{spec.projectTitle}</h2>
+              <p className="schedule-summary">{spec.summary}</p>
             </div>
-          )}
 
-          {errorMsg && (
-            <div className="error-banner" role="alert">
-              {errorMsg}
+            <div className="schedule-actions">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveToFirestore}
+                disabled={isSaving}
+              >
+                <Save size={15} aria-hidden="true" />
+                <span>{isSaving ? 'Saving…' : 'Save to Firestore'}</span>
+              </button>
+              <button type="button" className="btn-secondary" onClick={exportMarkdown}>
+                <FileText size={15} aria-hidden="true" />
+                <span>Export spec (.md)</span>
+              </button>
+              <button type="button" className="btn-secondary" onClick={exportJson}>
+                <Download size={15} aria-hidden="true" />
+                <span>Export PBR (.json)</span>
+              </button>
+            </div>
+          </div>
+
+          <dl className="spec-summary-band">
+            <div>
+              <dt>Program zone</dt>
+              <dd>{spec.roomType}</dd>
+            </div>
+            <div>
+              <dt>Lighting rig</dt>
+              <dd className="mono">
+                {spec.lightingMood.replace('_', ' ')} / {spec.sunKelvin}K
+              </dd>
+            </div>
+            <div>
+              <dt>Estimated budget</dt>
+              <dd className="mono">{spec.estimatedBudgetUsd}</dd>
+            </div>
+            <div>
+              <dt>Avg. finish rate</dt>
+              <dd className="mono">${averageSqmCost} / m²</dd>
+            </div>
+          </dl>
+
+          <div className="table-scroll">
+            <table className="schedule-table">
+              <caption className="sr-only">
+                Architectural material, PBR shader parameters, lighting specification, and estimated cost per square meter
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Zone</th>
+                  <th scope="col">Material specification</th>
+                  <th scope="col">Surface finish</th>
+                  <th scope="col">PBR roughness / metal</th>
+                  <th scope="col">Lighting specification</th>
+                  <th scope="col" className="num-col">Est. USD / m²</th>
+                </tr>
+              </thead>
+              <tbody>
+                {spec.materials.map((m, idx) => (
+                  <tr key={`${m.zone}-${idx}`}>
+                    <th scope="row">{m.zone}</th>
+                    <td>{m.materialName}</td>
+                    <td>{m.finish}</td>
+                    <td className="mono">
+                      R {m.pbrRoughness.toFixed(2)} / M {m.pbrMetalness.toFixed(2)}
+                    </td>
+                    <td>{m.lightingSpec}</td>
+                    <td className="mono num-col">${m.estimatedCostPerSqmUsd}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="audit-footnote">
+            <strong>Hybrid privacy audit:</strong> {spec.privacyAuditNote}
+          </p>
+        </section>
+
+        {/* Cloud Firestore Offline-Synced Saved Archive */}
+        <section className="archive-section" aria-labelledby="archive-heading">
+          <div className="archive-header">
+            <div>
+              <h2 id="archive-heading">Saved specification archive</h2>
+              <p className="archive-subtitle">
+                Cloud Firestore with offline persistence enabled across site visits.
+              </p>
+            </div>
+            <span className="mono archive-uid">
+              {uid ? `Session ${uid.slice(0, 8)}` : 'Local cache active'}
+            </span>
+          </div>
+
+          {savedSpecs.length === 0 ? (
+            <p className="archive-empty">
+              No saved specifications yet. Customize or generate a 3D material spec above, then select{' '}
+              <strong>Save to Firestore</strong> to persist presets across sessions.
+            </p>
+          ) : (
+            <div className="archive-grid">
+              {savedSpecs.map((item) => (
+                <article key={item.id} className="archive-item">
+                  <div className="archive-palette-bar" aria-hidden="true">
+                    <span style={{ backgroundColor: item.spec.palette.wallHex }} />
+                    <span style={{ backgroundColor: item.spec.palette.floorHex }} />
+                    <span style={{ backgroundColor: item.spec.palette.woodHex }} />
+                    <span style={{ backgroundColor: item.spec.palette.accentHex }} />
+                    <span style={{ backgroundColor: item.spec.palette.waterHex }} />
+                  </div>
+                  <div className="archive-item-body">
+                    <h3>{item.projectTitle}</h3>
+                    <p className="archive-style">{item.architecturalStyle}</p>
+                    <div className="archive-meta mono">
+                      <span>{item.inferenceSource}</span>
+                      <span>{item.latencyMs} ms</span>
+                    </div>
+                    {item.createdAt && <time className="archive-time">{item.createdAt}</time>}
+                    <div className="archive-actions">
+                      <button
+                        type="button"
+                        className="btn-compact"
+                        onClick={() => {
+                          setSpec(item.spec);
+                          setRoomType(item.roomType);
+                          setStatusNotice(`Loaded "${item.projectTitle}" into the live 3D viewport.`);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                      >
+                        Load in 3D
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon-danger"
+                        onClick={() => handleDeleteSaved(item)}
+                        aria-label={`Delete ${item.projectTitle}`}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </section>
-
-        {/* Right: Real-Time 3D Architectural Preview + Streaming Critique */}
-        <div>
-          <Arch3DViewport spec={spec} telemetry={telemetry} isGenerating={isGenerating} />
-
-          {(critiqueText || isStreaming) && (
-            <section className="critique-box" aria-live="polite">
-              <div className="section-title" style={{ marginBottom: 8 }}>
-                <span>Live Streaming Construction-Site Critique</span>
-                {critiqueTelemetry && (
-                  <span style={{ fontSize: '0.74rem', color: 'var(--brand)' }}>
-                    {critiqueTelemetry.inferenceSource} · {critiqueTelemetry.latencyMs}ms
-                  </span>
-                )}
-              </div>
-              <p className="critique-text">{critiqueText || 'Streaming insights...'}</p>
-            </section>
-          )}
-        </div>
       </main>
 
-      {/* Full Room-by-Room Material & Lighting Specification Sheet */}
-      <section className="panel-card spec-section">
-        <div className="spec-header-row">
-          <div>
-            <h2>{spec.projectTitle}</h2>
-            <p style={{ margin: '4px 0 0', fontSize: '0.88rem', color: 'var(--muted)' }}>
-              {spec.summary}
-            </p>
-            <div className="spec-meta">
-              <span className="meta-tag">Style: {spec.architecturalStyle}</span>
-              <span className="meta-tag">Zone: {spec.roomType}</span>
-              <span className="meta-tag">Sun: {spec.sunKelvin}K</span>
-              <span className="meta-tag">Est. Budget: {spec.estimatedBudgetUsd}</span>
-            </div>
-          </div>
-
-          <div className="toolbar-btns">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleSaveToFirestore}
-              disabled={isSaving}
-            >
-              <Save size={15} />
-              {isSaving ? 'Saving...' : 'Save to Firestore'}
-            </button>
-            <button type="button" className="btn-secondary" onClick={exportMarkdown}>
-              <FileText size={15} />
-              Export Spec (.md)
-            </button>
-            <button type="button" className="btn-secondary" onClick={exportJson}>
-              <Download size={15} />
-              Export PBR (.json)
-            </button>
-          </div>
-        </div>
-
-        <div className="table-wrap">
-          <table className="spec-table">
-            <thead>
-              <tr>
-                <th>Architectural Zone</th>
-                <th>Material Specification</th>
-                <th>Surface Finish</th>
-                <th>PBR (Rough / Metal)</th>
-                <th>Lighting & Color Temp</th>
-                <th>Est. USD / m²</th>
-              </tr>
-            </thead>
-            <tbody>
-              {spec.materials.map((m, idx) => (
-                <tr key={`${m.zone}-${idx}`}>
-                  <td>
-                    <strong>{m.zone}</strong>
-                  </td>
-                  <td>{m.materialName}</td>
-                  <td>{m.finish}</td>
-                  <td>
-                    <code>
-                      R:{m.pbrRoughness.toFixed(2)} · M:{m.pbrMetalness.toFixed(2)}
-                    </code>
-                  </td>
-                  <td>{m.lightingSpec}</td>
-                  <td>
-                    <strong>${m.estimatedCostPerSqmUsd}</strong>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="privacy-note">
-          <strong>Hybrid Privacy & Delivery Audit:</strong> {spec.privacyAuditNote}
-        </div>
-      </section>
-
-      {/* Cloud Firestore Offline-Synced Saved Specifications */}
-      <section className="panel-card spec-section">
-        <div className="section-title">
-          <span>Saved Material Specifications (Cloud Firestore Offline-First Sync)</span>
-          <span>{uid ? `Session UID: ${uid.slice(0, 8)}...` : 'Connecting Auth...'}</span>
-        </div>
-
-        {savedSpecs.length === 0 ? (
-          <p style={{ fontSize: '0.84rem', color: 'var(--muted)', margin: 0 }}>
-            No saved specifications yet. Generate a 3D Material Spec above and click{' '}
-            <strong>Save to Firestore</strong> to persist presets across sessions and offline site visits.
-          </p>
-        ) : (
-          <div className="saved-grid">
-            {savedSpecs.map((item) => (
-              <div key={item.id} className="saved-card">
-                <h4>{item.projectTitle}</h4>
-                <small>
-                  {item.architecturalStyle} · {item.inferenceSource} ({item.latencyMs}ms)
-                </small>
-                {item.createdAt && <small>{item.createdAt}</small>}
-                <div className="saved-actions">
-                  <button
-                    type="button"
-                    className="btn-mini"
-                    onClick={() => {
-                      setSpec(item.spec);
-                      setRoomType(item.roomType);
-                      setStatusNotice(`Loaded "${item.projectTitle}" into live 3D viewport.`);
-                    }}
-                  >
-                    Load in 3D
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ padding: '4px 8px', fontSize: '0.72rem' }}
-                    onClick={() => handleDeleteSaved(item.id)}
-                    aria-label={`Delete ${item.projectTitle}`}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
       <footer className="studio-footer">
-        <span>
-          Built for <strong>#BuildHybridAI 2026</strong> with Firebase AI Logic, App Check, Remote
-          Config, Firestore & Three.js · Apache-2.0 Open Source
-        </span>
-        <span>
-          Created by <strong>Prasada Arif Nurudin</strong> (Dream House 3D Lab) ·{' '}
-          <a href="https://github.com/asaddin02" target="_blank" rel="noreferrer">
-            github.com/asaddin02
-          </a>
-        </span>
+        <div className="footer-inner">
+          <p>
+            Built for <strong>#BuildHybridAI 2026</strong> with Firebase AI Logic, App Check, Remote Config, Firestore, and Three.js (Apache-2.0).
+          </p>
+          <p>
+            Created by <strong>Prasada Arif Nurudin</strong> (Dream House 3D Lab) —{' '}
+            <a href="https://github.com/asaddin02/archspec-hybrid-ai" target="_blank" rel="noreferrer">
+              github.com/asaddin02/archspec-hybrid-ai
+            </a>
+          </p>
+        </div>
       </footer>
     </div>
   );

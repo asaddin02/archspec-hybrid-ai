@@ -49,6 +49,7 @@ export interface HybridTelemetry {
   timestamp: string;
   onlineAtCall: boolean;
   cloudBytesSent: number;
+  fallbackReason?: string;
 }
 
 export interface SavedSpecRecord {
@@ -61,6 +62,7 @@ export interface SavedSpecRecord {
   latencyMs: number;
   spec: ArchMaterialSpec;
   createdAt?: string;
+  storageOrigin?: 'firestore' | 'local';
 }
 
 export const DEFAULT_ARCH_SPEC: ArchMaterialSpec = {
@@ -71,9 +73,9 @@ export const DEFAULT_ARCH_SPEC: ArchMaterialSpec = {
     'Warm lime-plaster volumes paired with vertical Hinoki cedar louvers, honed limestone flooring, and a tranquil indoor-outdoor reflecting court balanced for golden-hour glare control.',
   lightingMood: 'golden_hour',
   sunKelvin: 3400,
-  estimatedBudgetUsd: '$18,500 – $24,000 (Interior & Courtyard Finishes)',
+  estimatedBudgetUsd: '$18,500 – $24,000',
   privacyAuditNote:
-    'NDA Safe: Client floor-plan brief processed locally where on-device Gemini Nano is available; falls back to Firebase AI Logic cloud only when required.',
+    'NDA safe: Client floor-plan brief processes locally whenever on-device Gemini Nano is available; falls back to Firebase AI Logic cloud only when permitted by routing mode.',
   palette: {
     wallHex: '#e9e2d6',
     floorHex: '#b9ae9d',
@@ -85,48 +87,48 @@ export const DEFAULT_ARCH_SPEC: ArchMaterialSpec = {
   },
   materials: [
     {
-      zone: 'Primary Feature Walls',
-      materialName: 'Mineral Limewash Plaster (Warm Chalk)',
-      finish: 'Matte Hand-Troweled',
+      zone: 'Primary feature walls',
+      materialName: 'Mineral limewash plaster (Warm Chalk)',
+      finish: 'Matte hand-troweled',
       pbrRoughness: 0.86,
       pbrMetalness: 0.0,
-      lightingSpec: '2700K Recessed Linear Wall Washer (CRI 95+)',
+      lightingSpec: '2700K recessed linear wall washer (CRI 95+)',
       estimatedCostPerSqmUsd: 68,
     },
     {
-      zone: 'Flooring & Terrace Continuity',
-      materialName: 'Honed Roman Travertine Slabs (90x90cm)',
-      finish: 'Open-Pore Matte Anti-Slip R10',
+      zone: 'Flooring & terrace continuity',
+      materialName: 'Honed Roman travertine slabs (90x90 cm)',
+      finish: 'Open-pore matte anti-slip R10',
       pbrRoughness: 0.68,
       pbrMetalness: 0.02,
-      lightingSpec: 'Low-glare 3000K Step Perimeter Grazing',
+      lightingSpec: 'Low-glare 3000K step perimeter grazing',
       estimatedCostPerSqmUsd: 135,
     },
     {
-      zone: 'Brise-Soleil & Ceiling Baffles',
-      materialName: 'Kiln-Dried Japanese Hinoki / Teak Slats',
-      finish: 'Clear Rubio Monocoat Oil',
+      zone: 'Brise-soleil & ceiling soffit',
+      materialName: 'Kiln-dried Japanese Hinoki / teak slats',
+      finish: 'Clear Rubio Monocoat oil',
       pbrRoughness: 0.54,
       pbrMetalness: 0.0,
-      lightingSpec: 'Natural Filtered Daylight + 2700K Cove Uplight',
+      lightingSpec: 'Filtered daylight with 2700K cove uplight',
       estimatedCostPerSqmUsd: 112,
     },
     {
-      zone: 'Lounge Upholstery & Accent Millwork',
-      materialName: 'Moss-Green Boucle Linen & Brushed Bronze',
-      finish: 'Textured Matte Fabric / Satin Metal',
+      zone: 'Lounge upholstery & millwork',
+      materialName: 'Moss-green boucle linen & brushed bronze',
+      finish: 'Textured matte fabric / satin metal',
       pbrRoughness: 0.9,
       pbrMetalness: 0.15,
-      lightingSpec: '3000K 24-deg Accent Spotlights over Table',
+      lightingSpec: '3000K 24-deg accent spotlights over table',
       estimatedCostPerSqmUsd: 95,
     },
     {
-      zone: 'Courtyard Reflecting Pool',
-      materialName: 'Green Sukabumi Volcanic Stone Basin',
-      finish: 'Split-Face Wet Seal',
+      zone: 'Courtyard reflecting pool',
+      materialName: 'Green Sukabumi volcanic stone basin',
+      finish: 'Split-face wet seal',
       pbrRoughness: 0.24,
       pbrMetalness: 0.08,
-      lightingSpec: 'Submerged 2700K IP68 Underwater Washers',
+      lightingSpec: 'Submerged 2700K IP68 underwater washers',
       estimatedCostPerSqmUsd: 148,
     },
   ],
@@ -145,7 +147,7 @@ export const PRESET_BRIEFS = [
     label: 'Esthetic & Dental Clinic (Daylight)',
     roomType: 'Medical Wellness & Consultation Lounge',
     prompt:
-      'Design a calming, hygienic modern dental & esthetic clinic consultation lounge. Use crisp warm alabaster walls, antimicrobial terrazzo flooring, pale white-oak acoustic slats, serene sage-blue accents, and high-CRI 4800K natural daylight illumination.',
+      'Design a calming, hygienic modern dental and esthetic clinic consultation lounge. Use crisp warm alabaster walls, antimicrobial terrazzo flooring, pale white-oak acoustic slats, serene sage-blue accents, and high-CRI 4800K natural daylight illumination.',
   },
   {
     id: 'tokyo-serenity',
